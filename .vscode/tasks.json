@@ -8,6 +8,8 @@
 			"args": [
 				"main.cpp",
 				"-lsdl2",
+				"-lsdl2_gfx",
+				"--std=c++17",
 				"-o",
 				"main"
 			],
