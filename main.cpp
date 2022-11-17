@@ -22,6 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <SDL2/SDL2_gfxPrimitives.h>
 #include <iostream>
 #include <string>
+#include <thread>
 
 SDL_Window *g_window;
 SDL_Surface *g_screen;
@@ -34,59 +35,206 @@ enum class Chess {
 	PLAYER
 };
 
+typedef unsigned int Color;
+
+const Color colorMap[3] = { 0xffffffff, 0xff0000ff, 0xffff0000 };
+
+unsigned int smoothen(unsigned int current, unsigned int target, int change);
+Color smoothenColor(Color current, Color target, int change);
+void doComputerTurn();
+
 class SubChessboard {
 	Chess __board[9];
+	Color __colors[9], __targets[9];  // colors to apply gradual changes
+	Color __color;  // color to draw lines
 
 public:
-	SubChessboard();
+	SubChessboard(Color color = 0xff707070);
 
 	void show(int x, int y);
+	void showChess(int x, int y, int i, Chess c);
+	void onMousedown(int id, int mx, int my, Chess c);
+	Chess getChess(int i, int j);
+	bool setChess(int i, int j, Chess c);
+	int has(int len, Chess c);
+
+	friend void doComputerTurn();
 };
 
 class Chessboard {
 	SubChessboard *__boards[9];
+	SubChessboard *__total;
+	Chess __turn;
+	int __active;
 
 public:
 	Chessboard();
 	~Chessboard();
 
 	void show();
+	void onMousedown(int mx, int my);
+	bool setChess(int id, int i, int j, Chess c);
+
+	friend void doComputerTurn();
 } g_chessboard;
 
-SubChessboard::SubChessboard()
+SubChessboard::SubChessboard(Color color)
 {
-	for (int i = 0; i < 9; i++)
+	for (int i = 0; i < 9; i++) {
 		__board[i] = Chess::NONE;
+		__colors[i] = __targets[i] = 0xffdcdcdc;
+	}
+	__color = color;
 }
 
 void SubChessboard::show(int x, int y)
 {
-	lineColor(g_renderer, x + 5, y + 45, x + 125, y + 45, 0xff707070);
-	lineColor(g_renderer, x + 5, y + 85, x + 125, y + 85, 0xff707070);
-	lineColor(g_renderer, x + 45, y + 5, x + 45, y + 125, 0xff707070);
-	lineColor(g_renderer, x + 85, y + 5, x + 85, y + 125, 0xff707070);
+	lineColor(g_renderer, x + 5, y + 45, x + 125, y + 45, __color);
+	lineColor(g_renderer, x + 5, y + 85, x + 125, y + 85, __color);
+	lineColor(g_renderer, x + 45, y + 5, x + 45, y + 125, __color);
+	lineColor(g_renderer, x + 85, y + 5, x + 85, y + 125, __color);
+	for (int i = 0; i < 9; i++) {
+		__colors[i] = smoothenColor(__colors[i], __targets[i], 10);
+		showChess(x + i % 3 * 40 + 5, y + i / 3 * 40 + 5, i,  __board[i]);
+	}
+}
+
+void SubChessboard::showChess(int x, int y, int i, Chess c)
+{
+	if (c == Chess::NONE) return;
+	if (c == Chess::PLAYER) {
+		circleColor(g_renderer, x + 20, y + 20, 14, __colors[i]);
+	}
+	else {
+		lineColor(g_renderer, x + 6, y + 6, x + 34, y + 34, __colors[i]);
+		lineColor(g_renderer, x + 6, y + 34, x + 34, y + 6, __colors[i]);
+	}
+}
+
+void SubChessboard::onMousedown(int id, int mx, int my, Chess c)
+{
+	if (mx < 5 || my < 5 || mx >= 125 || my >= 125) return;
+	int i = (mx - 5) / 40;
+	int j = (my - 5) / 40;
+	g_chessboard.setChess(id, i, j, c);
+}
+
+Chess SubChessboard::getChess(int i, int j)
+{
+	if (i < 0 || j < 0 || i >= 3 || j >= 3) return Chess::NONE;
+	return __board[i + j * 3];
+}
+
+bool SubChessboard::setChess(int i, int j, Chess c)
+{
+	if (__board[i + j * 3] != Chess::NONE) return false;
+	__board[i + j * 3] = c;
+	__targets[i + j * 3] = colorMap[int(c)];
+	return true;
+}
+
+int SubChessboard::has(int len, Chess c)
+{
+	static int dx[4] = { 1, 1, 0, -1 };
+	static int dy[4] = { 0, 1, 1, 1 };
+	int sum = 0;
+	for (int i = 0; i < 3; i++) {
+		for (int j = 0; j < 3; j++) {
+			for (int d = 0; d < 4; d++) {
+				bool flag = false;
+				for (int k = 0; k < len; k++) {
+					if (getChess(i + k * dx[d], j + k * dy[d]) != c) {
+						flag = true;
+						break;
+					}
+				}
+				if (!flag) sum++;
+			}
+		}
+	}
+	return sum;
 }
 
 Chessboard::Chessboard()
 {
 	for (int i = 0; i < 9; i++)
 		__boards[i] = new SubChessboard();
+	__total = new SubChessboard(0xff000000);
+	__turn = Chess::PLAYER;
+	__active = -1;
+	setChess(3, 1, 1, Chess::COMPUTER);
+	setChess(1, 1, 1, Chess::PLAYER);
 }
 
 Chessboard::~Chessboard()
 {
 	for (int i = 0; i < 9; i++)
 		delete __boards[i];
+	delete __total;
 }
 
 void Chessboard::show()
 {
 	for (int i = 0; i < 9; i++)
-		__boards[i]->show((i % 3) * 130 + 20, (i / 3) * 130 + 170);
+		__boards[i]->show(i % 3 * 130 + 20, i / 3 * 130 + 170);
+	__total->show(150, 20);
 	thickLineColor(g_renderer, 15, 300, 415, 300, 2, 0xff000000);
 	thickLineColor(g_renderer, 15, 430, 415, 430, 2, 0xff000000);
 	thickLineColor(g_renderer, 150, 165, 150, 565, 2, 0xff000000);
 	thickLineColor(g_renderer, 280, 165, 280, 565, 2, 0xff000000);
+	SDL_Rect rect = { 20, 170, 390, 390 };
+	SDL_SetRenderDrawColor(g_renderer, 0, 230, 0, 255);
+	SDL_RenderDrawRect(g_renderer, &rect);
+}
+
+void Chessboard::onMousedown(int mx, int my)
+{
+	if (__turn != Chess::PLAYER) return;
+	SDL_Point p = { mx, my };
+	SDL_Rect rect = { 20, 170, 390, 390 };
+	if (!SDL_PointInRect(&p, &rect)) return;
+	mx -= 20;
+	my -= 170;
+	int id = mx / 130 + my / 130 * 3;
+	__boards[id]->onMousedown(id, mx % 130, my % 130, Chess::PLAYER);
+	__turn = Chess::COMPUTER;
+	std::thread thread(doComputerTurn);
+	thread.detach();
+}
+
+bool Chessboard::setChess(int id, int i, int j, Chess c)
+{
+	if (!__boards[id]->setChess(i, j, c)) return false;
+	int s = __boards[id]->has(3, c);
+	if (s > 0)
+		__total->setChess(id % 3, id / 3, c);
+	return true;
+}
+
+unsigned int smoothen(unsigned int current_, unsigned int target_, int change)
+{
+	// cast to `long long`: avoid underflowing
+	long long current = current_, target = target_;
+	if (current < target) {
+		current = std::min(current + change, target);
+	}
+	else if (current > target) {
+		current = std::max(current - change, target);
+	}
+	return (unsigned int) current;
+}
+
+Color smoothenColor(Color current, Color target, int change)
+{
+	Color r = 0xff000000;
+	// apply gradual changes to every tricolor by using bit operations
+	r |= (smoothen(
+		current & 0xff, target & 0xff, change) & 0xff);
+	r |= (smoothen(
+		(current >> 8) & 0xff, (target >> 8) & 0xff, change) & 0xff) << 8;
+	r |= (smoothen(
+		(current >> 16) & 0xff, (target >> 16) & 0xff, change) & 0xff) << 16;
+	return r;
 }
 
 void error(std::string msg)
@@ -117,11 +265,24 @@ void quit()
 	exit(0);
 }
 
+void doComputerTurn()
+{
+	g_chessboard.__turn = Chess::PLAYER;
+}
+
 void update()
 {
 	SDL_SetRenderDrawColor(g_renderer, 220, 220, 220, 255);
 	SDL_RenderFillRect(g_renderer, 0);
 	g_chessboard.show();
+}
+
+void onMousedown(const SDL_Event &event)
+{
+	// only handle left button pressing
+	if (event.button.button != SDL_BUTTON_LEFT) return;
+	int mx = event.button.x, my = event.button.y;
+	g_chessboard.onMousedown(mx, my);
 }
 
 int main()
@@ -132,6 +293,9 @@ int main()
 		SDL_PollEvent(&event);
 		if (event.type == SDL_QUIT) {
 			break;
+		}
+		else if (event.type == SDL_MOUSEBUTTONDOWN) {
+			onMousedown(event);
 		}
 		update();
 		SDL_RenderPresent(g_renderer);
