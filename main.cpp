@@ -115,6 +115,9 @@ public:
 	friend void doComputerTurn();
 	friend int singleComputerTurn(Chessboard &board, Chess c,
 		const SubConfig &config, int *pid, int *pi, int *pj, int diff);
+	friend int subComputerTurn(Chessboard &copy, SubChessboard *board,
+		SubChessboard *total, Chess c, int *pi, int *pj,
+		int id, int diff);
 } g_chessboard;
 
 SubChessboard::SubChessboard(Color color)
@@ -500,7 +503,10 @@ int subComputerTurn(Chessboard &copy, SubChessboard *board,
 	int max = INT_MIN, ri = 0, rj = 0;
 	for (int i = 0; i < 3; i++) {
 		for (int j = 0; j < 3; j++) {
+			int active = copy.__active;
 			if (!board->setChess(i, j, c)) continue;
+			copy.__active = copy.__boards[i + j * 3]->full() ?
+				-1 : i + j * 3;
 			int score = config.none;
 			int s = board->has(3, c);
 			int new2 = 0, new3 = 0;
@@ -532,6 +538,7 @@ int subComputerTurn(Chessboard &copy, SubChessboard *board,
 				ri = i, rj = j;
 			}
 			board->erase(i, j);
+			copy.__active = active;
 		}
 	}
 	*pi = ri;
@@ -550,7 +557,7 @@ int singleComputerTurn(Chessboard &board, Chess c, const SubConfig &config,
 		int score = subComputerTurn(
 			board, board.__boards[k], board.__total, c, &i, &j, k,
 			diff);
-		if (score > max) {
+		if (score > max || (score == max && rand() % 3 < 2)) {
 			max = score;
 			ri = i, rj = j, rk = k;
 		}
@@ -563,10 +570,14 @@ int singleComputerTurn(Chessboard &board, Chess c, const SubConfig &config,
 
 void doComputerTurn()
 {
+	std::chrono::high_resolution_clock::time_point tp =
+		std::chrono::high_resolution_clock::now() +
+		std::chrono::milliseconds(750);
 	Chessboard copy = &g_chessboard;
 	int id, i, j;
 	singleComputerTurn(copy, Chess::COMPUTER, Config::sub, &id, &i, &j,
 		Config::difficulty);
+	std::this_thread::sleep_until(tp);
 	g_chessboard.setChess(id, i, j, Chess::COMPUTER);
 	g_chessboard.__turn = Chess::PLAYER;
 }
@@ -629,5 +640,5 @@ void Config::configDefault()
 	total.sides = 0.95;
 	total.center = 0.9;
 	total.oppo = 0.98;
-	difficulty = 3;
+	difficulty = 4;
 }
