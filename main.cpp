@@ -29,6 +29,7 @@ SDL_Window *g_window;
 SDL_Surface *g_screen;
 SDL_Renderer *g_renderer;
 FPSmanager g_fpsManager;
+TTF_Font *g_libian;
 
 enum class Chess {
 	NONE = 0,
@@ -111,6 +112,7 @@ public:
 	void doWin(Chess c);
 	void updateActive();
 	SDL_Rect getActive();
+	Chess turn();
 
 	friend void doComputerTurn();
 	friend int singleComputerTurn(Chessboard &board, Chess c,
@@ -285,6 +287,16 @@ void Chessboard::showBanner()
 		filledPolygonRGBA(g_renderer, vx, vy, 4,
 			color & 0xff, (color >> 8) & 0xff, (color >> 16) & 0xff,
 			__alpha);
+		SDL_Color fg = { 255, 255, 255, (unsigned char)(__alpha * 255 / __targetAlpha) };
+		char *msg;
+		if (g_win == Chess::COMPUTER) msg = (char *) "Computer wins!";
+		else msg = (char *) "Player wins!";
+		SDL_Surface *surface = TTF_RenderText_Blended(g_libian, msg, fg);
+		SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_BLEND);
+		SDL_Rect rect = { 0, 0, surface->w, surface->h };
+		rect.x = (430 - rect.w) / 2;
+		rect.y = (580 - rect.h) / 2;
+		SDL_BlitSurface(surface, 0, g_screen, &rect);
 	}
 }
 
@@ -404,6 +416,11 @@ SDL_Rect Chessboard::getActive()
 	return rect;
 }
 
+Chess Chessboard::turn()
+{
+	return __turn;
+}
+
 template <typename Tp>
 Tp smoothen(Tp current_, Tp target_, int change)
 {
@@ -447,8 +464,10 @@ void init()
 	if (!g_window) error("failed to create window");
 	g_screen = SDL_GetWindowSurface(g_window);
 	g_renderer = SDL_CreateSoftwareRenderer(g_screen);
+	SDL_SetRenderDrawBlendMode(g_renderer, SDL_BLENDMODE_BLEND);
 	SDL_initFramerate(&g_fpsManager);
-	SDL_setFramerate(&g_fpsManager, 40);
+	SDL_setFramerate(&g_fpsManager, 80);
+	g_libian = TTF_OpenFont("libian.ttc", 60);
 }
 
 void quit()
@@ -456,6 +475,7 @@ void quit()
 	SDL_DestroyRenderer(g_renderer);
 	SDL_FreeSurface(g_screen);
 	SDL_DestroyWindow(g_window);
+	TTF_CloseFont(g_libian);
 	TTF_Quit();
 	SDL_Quit();
 	exit(0);
@@ -514,6 +534,7 @@ int subComputerTurn(Chessboard &copy, SubChessboard *board,
 				new2 = std::max(board->has(2, c) - has2, 0);
 				new3 = std::max(s - has3, 0);
 			}
+			bool flag = total->getChess(id % 3, id / 3) != Chess::NONE;
 			if (s > 0) {
 				if (total->setChess(id % 3, id / 3, c)) {
 					int tnew2 = std::max(total->has(2, c) - thas2, 0);
@@ -528,6 +549,9 @@ int subComputerTurn(Chessboard &copy, SubChessboard *board,
 			}
 			score += calcTimes(config.row2, new2, config.row2times);
 			score += calcTimes(config.row3, new3, config.row3times);
+			if (flag) {
+				score *= 0.2;
+			}
 			int x;
 			score -= singleComputerTurn(copy,
 				c == Chess::COMPUTER ? Chess::PLAYER : Chess::COMPUTER,
@@ -594,7 +618,7 @@ void onMousedown(const SDL_Event &event)
 	// only handle left button pressing
 	if (event.button.button != SDL_BUTTON_LEFT) return;
 	int mx = event.button.x, my = event.button.y;
-	if (g_win == Chess::NONE)
+	if (g_win == Chess::NONE && g_chessboard.turn() == Chess::PLAYER)
 		g_chessboard.onMousedown(mx, my);
 }
 
@@ -639,6 +663,5 @@ void Config::configDefault()
 	total.corners = 1.0;
 	total.sides = 0.95;
 	total.center = 0.9;
-	total.oppo = 0.98;
 	difficulty = 4;
 }
