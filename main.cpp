@@ -20,6 +20,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <SDL2/SDL.h>
 #include <SDL2/SDL2_framerate.h>
 #include <SDL2/SDL2_gfxPrimitives.h>
+#include <SDL2/SDL_ttf.h>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -35,6 +36,22 @@ enum class Chess {
 	PLAYER = 2
 };
 Chess g_win = Chess::NONE;
+
+// config for subchessboard
+struct SubConfig {
+	int none, row2, row3;
+	double row2times, row3times, corners, sides, center, oppo;
+};
+
+namespace Config {
+	SubConfig sub, total;
+	int difficulty;
+}
+
+// config functions to choice
+namespace Config {
+	void configDefault();
+}
 
 typedef unsigned int Color;
 
@@ -53,13 +70,16 @@ class SubChessboard {
 
 public:
 	SubChessboard(Color color = 0xff707070);
+	SubChessboard(SubChessboard *old);
 
 	void show(int x, int y);
 	void showChess(int x, int y, int i, Chess c);
 	bool onMousedown(int id, int mx, int my, Chess c);
 	Chess getChess(int i, int j);
 	bool setChess(int i, int j, Chess c);
+	void erase(int i, int j);
 	bool full();
+	int count(Chess c);
 	int has(int len, Chess c);
 
 	friend void doComputerTurn();
@@ -77,16 +97,24 @@ class Chessboard {
 
 public:
 	Chessboard();
+	Chessboard(Chessboard *old);
 	~Chessboard();
 
 	void show();
 	void showBanner();
 	void onMousedown(int mx, int my);
 	bool setChess(int id, int i, int j, Chess c);
+	bool hasWinner();
+	void setWinner();
+	Chess checkRawWin();
+	Chess checkSumWin();
+	void doWin(Chess c);
 	void updateActive();
 	SDL_Rect getActive();
 
 	friend void doComputerTurn();
+	friend int singleComputerTurn(Chessboard &board, Chess c,
+		const SubConfig &config, int *pid, int *pi, int *pj, int diff);
 } g_chessboard;
 
 SubChessboard::SubChessboard(Color color)
@@ -97,6 +125,14 @@ SubChessboard::SubChessboard(Color color)
 	}
 	__color = color;
 	__lattices = 9;
+}
+
+SubChessboard::SubChessboard(SubChessboard *old)
+{
+	for (int i = 0; i < 9; i++) {
+		__board[i] = old->__board[i];
+	}
+	__lattices = old->__lattices;
 }
 
 void SubChessboard::show(int x, int y)
@@ -146,9 +182,24 @@ bool SubChessboard::setChess(int i, int j, Chess c)
 	return true;
 }
 
+void SubChessboard::erase(int i, int j)
+{
+	if (__board[i + j * 3] != Chess::NONE) __lattices++;
+	__board[i + j * 3] = Chess::NONE;
+}
+
 bool SubChessboard::full()
 {
 	return __lattices == 0;
+}
+
+int SubChessboard::count(Chess c)
+{
+	int sum = 0;
+	for (int i = 0; i < 9; i++) {
+		if (__board[i] == c) sum++;
+	}
+	return sum;
 }
 
 int SubChessboard::has(int len, Chess c)
@@ -166,6 +217,9 @@ int SubChessboard::has(int len, Chess c)
 						break;
 					}
 				}
+				if (getChess(i - dx[d], j - dy[d]) == c) continue;
+				if (getChess(i + (len + 1) * dx[d], j + (len + 1) * dy[d]) ==
+					c) continue;
 				if (!flag) sum++;
 			}
 		}
@@ -184,6 +238,16 @@ Chessboard::Chessboard()
 	__activeColor = __targetColor = 0xff00e000;
 	__activeCount = 0;
 	__alpha = __targetAlpha = 0;
+}
+
+Chessboard::Chessboard(Chessboard *old)
+{
+	for (int i = 0; i < 9; i++) {
+		__boards[i] = new SubChessboard(old->__boards[i]);
+	}
+	__total = new SubChessboard(old->__total);
+	__turn = old->__turn;
+	__active = old->__active;
 }
 
 Chessboard::~Chessboard()
@@ -246,15 +310,63 @@ bool Chessboard::setChess(int id, int i, int j, Chess c)
 	int s = __boards[id]->has(3, c);
 	if (s > 0) {
 		__total->setChess(id % 3, id / 3, c);
-		s = __total->has(3, c);
-		if (s > 0) {
-			g_win = c;
-			__targetAlpha = 120;
+		if (hasWinner()) {
+			setWinner();
 		}
 	}
 	__active = __boards[i + j * 3]->full() ? -1 : i + j * 3;
 	__targetRect = getActive();
 	return true;
+}
+
+bool Chessboard::hasWinner()
+{
+	if (checkRawWin() != Chess::NONE) return true;
+	if (__total->full()) return true;
+	for (int i = 0; i < 9; i++) {
+		if (!__boards[i]->full()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void Chessboard::setWinner()
+{
+	Chess winner = checkRawWin();
+	if (winner == Chess::NONE) {
+		for (int i = 0; i < 9; i++) {
+			int s1 = __boards[i]->count(Chess::COMPUTER);
+			int s2 = __boards[i]->count(Chess::PLAYER);
+			if (s1 > s2) __total->setChess(i % 3, i / 3, Chess::COMPUTER);
+			else __total->setChess(i % 3, i / 3, Chess::PLAYER);
+		}
+		winner = checkSumWin();
+	}
+	doWin(winner);
+}
+
+Chess Chessboard::checkRawWin()
+{
+	int s = __total->has(3, Chess::COMPUTER);
+	if (s > 0) return Chess::COMPUTER;
+	s = __total->has(3, Chess::PLAYER);
+	if (s > 0) return Chess::PLAYER;
+	return Chess::NONE;
+}
+
+Chess Chessboard::checkSumWin()
+{
+	int s1 = __total->count(Chess::COMPUTER);
+	int s2 = __total->count(Chess::PLAYER);
+	if (s1 > s2) return Chess::COMPUTER;
+	else return Chess::PLAYER;
+}
+
+void Chessboard::doWin(Chess c)
+{
+	g_win = c;
+	__targetAlpha = 120;
 }
 
 void Chessboard::updateActive()
@@ -287,7 +399,6 @@ SDL_Rect Chessboard::getActive()
 		};
 	}
 	return rect;
-
 }
 
 template <typename Tp>
@@ -326,6 +437,7 @@ void error(std::string msg)
 void init()
 {
 	if (SDL_Init(SDL_INIT_EVERYTHING) < 0) error("failed to initalize SDL2");
+	TTF_Init();
 	SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
 	g_window = SDL_CreateWindow("Multi-tic-tac-toe", SDL_WINDOWPOS_CENTERED,
 		SDL_WINDOWPOS_CENTERED, 430, 580, SDL_WINDOW_SHOWN);
@@ -341,24 +453,121 @@ void quit()
 	SDL_DestroyRenderer(g_renderer);
 	SDL_FreeSurface(g_screen);
 	SDL_DestroyWindow(g_window);
+	TTF_Quit();
 	SDL_Quit();
 	exit(0);
 }
 
+int getPos(int i, int j)
+{
+	static int map[9] = {
+		2, 1, 2,
+		1, 0, 1,
+		2, 1, 2
+	};
+	return map[i + j * 3];
+}
+
+double getTimes(int i, int j, const SubConfig &config)
+{
+	int p = getPos(i, j);
+	if (p == 2) return config.corners;
+	if (p == 1) return config.sides;
+	if (p == 0) return config.center;
+	return 0.0;
+}
+
+int calcTimes(int x, int y, double times)
+{
+	double t = 1.0;
+	int sum = 0;
+	for (int i = 0; i < y; i++) {
+		sum += x * t;
+		t *= times;
+	}
+	return sum;
+}
+
+int subComputerTurn(Chessboard &copy, SubChessboard *board,
+	SubChessboard *total, Chess c, int *pi, int *pj,
+	int id, int diff)
+{
+	const SubConfig &config = Config::sub, &t = Config::total;
+	int has2 = board->has(2, c);
+	int has3 = board->has(3, c);
+	int thas2 = total->has(2, c);
+	int thas3 = total->has(3, c);
+	int max = INT_MIN, ri = 0, rj = 0;
+	for (int i = 0; i < 3; i++) {
+		for (int j = 0; j < 3; j++) {
+			if (!board->setChess(i, j, c)) continue;
+			int score = config.none;
+			int s = board->has(3, c);
+			int new2 = 0, new3 = 0;
+			if (total->getChess(id % 3, id / 3) == Chess::NONE) {
+				new2 = std::max(board->has(2, c) - has2, 0);
+				new3 = std::max(s - has3, 0);
+			}
+			if (s > 0) {
+				if (total->setChess(id % 3, id / 3, c)) {
+					int tnew2 = std::max(total->has(2, c) - thas2, 0);
+					int tnew3 = std::max(total->has(3, c) - thas3, 0);
+					int tscore = t.none;
+					tscore += calcTimes(t.row2, tnew2, t.row2times);
+					tscore += calcTimes(t.row3, tnew3, t.row3times);
+					tscore *= getTimes(id % 3, id / 3, t);
+					score += tscore;
+					total->erase(id % 3, id / 3);
+				}
+			}
+			score += calcTimes(config.row2, new2, config.row2times);
+			score += calcTimes(config.row3, new3, config.row3times);
+			int x;
+			score -= singleComputerTurn(copy,
+				c == Chess::COMPUTER ? Chess::PLAYER : Chess::COMPUTER,
+				config, &x, &x, &x, diff - 1) * config.oppo;
+			score *= getTimes(i, j, config);
+			if (score > max || (score == max && rand() % 3 < 2)) {
+				max = score;
+				ri = i, rj = j;
+			}
+			board->erase(i, j);
+		}
+	}
+	*pi = ri;
+	*pj = rj;
+	return max;
+}
+
+int singleComputerTurn(Chessboard &board, Chess c, const SubConfig &config,
+	int *pid, int *pi, int *pj, int diff)
+{
+	if (diff <= 0) return 0;
+	int max = INT_MIN, id = 0, ri = 0, rj = 0, rk = 0;
+	for (int k = 0; k < 9; k++) {
+		if (board.__active != -1 && k != board.__active) continue;
+		int i, j;
+		int score = subComputerTurn(
+			board, board.__boards[k], board.__total, c, &i, &j, k,
+			diff);
+		if (score > max) {
+			max = score;
+			ri = i, rj = j, rk = k;
+		}
+	}
+	*pid = rk;
+	*pi = ri;
+	*pj = rj;
+	return max;
+}
+
 void doComputerTurn()
 {
-	for (int i = 0; i < 9; i++) {
-		if (g_chessboard.__active != -1 && i != g_chessboard.__active)
-			continue;
-		bool flag = false;
-		for (int j = 0; j < 9; j++) {
-			if (g_chessboard.setChess(i, j % 3, j / 3, Chess::COMPUTER)) {
-				flag = true;
-				break;
-			}
-		}
-		if (flag) break;
-	}
+	Chessboard copy = &g_chessboard;
+	int id, i, j;
+	singleComputerTurn(copy, Chess::COMPUTER, Config::sub, &id, &i, &j,
+		Config::difficulty);
+	g_chessboard.setChess(id, i, j, Chess::COMPUTER);
 	g_chessboard.__turn = Chess::PLAYER;
 }
 
@@ -381,6 +590,7 @@ void onMousedown(const SDL_Event &event)
 int main()
 {
 	init();
+	Config::configDefault();
 	SDL_Event event;
 	while (1) {
 		SDL_PollEvent(&event);
@@ -397,4 +607,27 @@ int main()
 	}
 	quit();
 	return 0;
+}
+
+void Config::configDefault()
+{
+	sub.none = 1;
+	sub.row2 = 3;
+	sub.row2times = 0.8;
+	sub.row3 = 12;
+	sub.row3times = 0.2;
+	sub.corners = 1.0;
+	sub.sides = 0.95;
+	sub.center = 0.9;
+	sub.oppo = 0.9;
+	total.none = 15;
+	total.row2 = 45;
+	total.row2times = 0.8;
+	total.row3 = 2048;
+	total.row3times = 0.2;
+	total.corners = 1.0;
+	total.sides = 0.95;
+	total.center = 0.9;
+	total.oppo = 0.98;
+	difficulty = 3;
 }
